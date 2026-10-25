@@ -1,0 +1,340 @@
+# Імпортуємо модуль base64 для перетворення двійкових файлів (картинок) у звичайний текст і навпаки
+import base64
+# Імпортуємо io для створення віртуальних файлів у оперативній пам'яті (щоб відкривати картинки з тексту)
+import io
+# Імпортуємо threading для створення фонових потоків (щоб інтерфейс не зависав під час очікування повідомлень)
+import threading
+# Імпортуємо необхідні класи з бібліотеки socket для створення мережевого підключення (TCP/IP)
+from socket import socket, AF_INET, SOCK_STREAM
+
+
+# Імпортуємо всі класи з бібліотеки customtkinter для створення сучасного графічного інтерфейсу
+from customtkinter import *
+# Імпортуємо filedialog зі стандартного tkinter для виклику вікна вибору файлу (картинки)
+from tkinter import filedialog
+# Імпортуємо Image з бібліотеки PIL (Pillow) для обробки зображень перед їх показом
+from PIL import Image
+
+
+
+
+# Створюємо головний клас програми, який наслідує всі властивості вікна CTk
+class MainWindow(CTk):
+   def __init__(self):
+       # Викликаємо конструктор батьківського класу для правильної ініціалізації вікна
+       super().__init__()
+
+
+       # Встановлюємо стартові розміри вікна (ширина 400 пікселів, висота 300)
+       self.geometry('400x300')
+       # Задаємо заголовок вікна, який буде відображатися у верхній панелі
+       self.title("chat client")
+       self.configure(fg_color='#120526')
+
+
+       # Встановлюємо стандартне ім'я користувача за замовчуванням
+       self.username = "???"
+
+
+       # === БЛОК НАЛАШТУВАННЯ БІЧНОГО МЕНЮ ===
+       self.label = None  # Резервуємо змінну для майбутнього напису в меню
+
+
+       # Створюємо фрейм (панель) для меню. width=30 - початкова ширина, height=300 - висота на все вікно
+       self.menu_frame = CTkFrame(self, width=30, height=300, fg_color='#0a0129')
+       # pack_propagate(False) забороняє фрейму автоматично стискатися під розмір елементів всередині нього
+       self.menu_frame.pack_propagate(False)
+       # Розміщуємо фрейм у верхньому лівому куті екрана (x=0, y=0)
+       self.menu_frame.place(x=0, y=0)
+
+
+       # Прапорець, який показує, чи відкрите меню зараз (False = закрите)
+       self.is_show_menu = False
+       # Швидкість і напрямок анімації меню (від'ємне значення означає рух вліво/сховати)
+       self.speed_animate_menu = -20
+
+
+       # Кнопка для відкриття/закриття меню. command=self.toggle_show_menu - функція, що спрацює при кліку
+       self.btn = CTkButton(self, text='>', command=self.toggle_show_menu, width=30, fg_color='#5a4d80')
+       self.btn.place(x=0, y=0)  # Ставимо її у лівий верхній кут
+
+
+       # === БЛОК НАЛАШТУВАННЯ ГОЛОВНОГО ПОЛЯ ЧАТУ ===
+       # CTkScrollableFrame - це фрейм, який автоматично додає смугу прокрутки (скрол), коли елементів стає багато
+       self.chat_field = CTkScrollableFrame(self, fg_color='#120526')
+       self.chat_field.place(x=0, y=0)  # Поки що ставимо в (0, 0), далі адаптуємо
+       self.chat_bg_image = CTkImage(light_image=Image.open("photo_5359668922971528780_y.jpg"),
+                                     dark_image=Image.open("photo_5359668922971528780_y.jpg"), size=(800, 600))
+       self.chat_bg_label = CTkLabel(self.chat_field, text="", image=self.chat_bg_image)
+       self.chat_bg_label.place(relx=0, rely=0, relwidth=1, relheight=1)
+       self.chat_bg_label.lower()
+
+
+       # === БЛОК ВВЕДЕННЯ ТА КНОПОК ===
+       # Поле для введення тексту. placeholder_text - сіра підказка, поки поле порожнє
+       self.message_entry = CTkEntry(self, placeholder_text='• do it quick:', height=40, fg_color='#0a0129', border_color='#FFFFFF', placeholder_text_color='#aaa3bd', font=('Courier New', 14))
+       self.message_entry.place(x=0, y=0)
+
+
+       # Кнопка для відправки тексту. width=50 - ширина, height=40 - висота
+       self.send_button = CTkButton(self, text='>', width=50, height=40, command=self.send_message, fg_color='#4a3f6e', hover_color='#5a4d80')
+       self.send_button.place(x=0, y=0)
+
+
+       # Кнопка для відкриття картинки (скріпка/папка)
+       self.open_img_button = CTkButton(self, text='⛶', width=50, height=40, command=self.open_image, fg_color='#4a3f6e', hover_color='#5a4d80')
+       self.open_img_button.place(x=0, y=0)
+
+
+       # Запускаємо безперервну функцію, яка буде підлаштовувати розміри елементів під розмір вікна
+       self.adaptive_ui()
+
+
+       # Демонстраційне виведення картинки при старті. Відкриваємо файл 'Cat03.jpg' з папки програми
+       # і задаємо йому розмір 300x300 пікселів за допомогою CTkImage
+       self.add_message("• демонстрація відображення зображення:",
+                        CTkImage(Image.open('tvmanlol.jpg'), size=(300, 300)))
+
+
+       # === БЛОК МЕРЕЖЕВОГО ПІДКЛЮЧЕННЯ ===
+       try:
+           # Створюємо сокет. AF_INET - використовуємо IPv4, SOCK_STREAM - протокол TCP (надійний)
+           self.sock = socket(AF_INET, SOCK_STREAM)
+           # Підключаємося до сервера, який запущений на цьому ж комп'ютері (localhost) на порту 8080
+           self.sock.connect(('localhost', 8080))
+
+
+           # Формуємо привітальне повідомлення за нашим протоколом (ТИП@АВТОР@ТЕКСТ)
+           hello = f"TEXT@{self.username}@[SYSTEM] {self.username} приєднався(лась) до альянсу!\n"
+           # Відправляємо його на сервер, перетворивши текст у байти (.encode)
+           self.sock.send(hello.encode('utf-8'))
+
+
+           # Створюємо і запускаємо фоновий потік для читання повідомлень від сервера.
+           # daemon=True означає, що потік помре сам, коли ми закриємо головне вікно
+           threading.Thread(target=self.recv_message, daemon=True).start()
+       except Exception as e:
+           # Якщо сервер не запущено, виводимо помилку в чат
+           self.add_message(f"• are u insane?! -> Не вдалося підключитися до сервера: {e}")
+
+
+   # Функція, яка визначає, що робити з меню при натисканні на кнопку
+   def toggle_show_menu(self):
+       if self.is_show_menu:  # Якщо меню відкрите
+           self.is_show_menu = False  # Ставимо статус "закривається"
+           self.speed_animate_menu *= -1  # Міняємо напрямок анімації на протилежний
+           self.btn.configure(text='>')  # Міняємо стрілочку
+           self.show_menu()  # Запускаємо анімацію
+       else:  # Якщо меню закрите
+           self.is_show_menu = True  # Ставимо статус "відкривається"
+           self.speed_animate_menu *= -1  # Міняємо напрямок анімації
+           self.btn.configure(text='<')
+           self.show_menu()
+
+
+           # При відкритті створюємо елементи всередині меню
+           self.label = CTkLabel(self.menu_frame, text='who are you?', text_color='#FFFFFF', font=('impact', 18, 'bold'))
+           self.label.pack(pady=30)  # Відступ зверху 30
+           self.entry = CTkEntry(self.menu_frame, placeholder_text="• Ваш нік...", placeholder_text_color='#aaa3bd', text_color='#FFFFFF', fg_color='#120526', border_color='#4a3f6e', border_width=1, font=('Courier New', 14))
+           self.entry.pack()
+           # Кнопка для збереження імені
+           self.save_button = CTkButton(self.menu_frame, text="lets demolish this place", command=self.save_name, fg_color='#4a3f6e', hover_color='#5a4d80', font=('Verdana', 14))
+           self.save_button.pack()
+
+
+   # Функція анімації виїжджання/ховання меню
+   def show_menu(self):
+       # Змінюємо ширину фрейму, додаючи до неї швидкість (наприклад, +20 або -20)
+       self.menu_frame.configure(width=self.menu_frame.winfo_width() + self.speed_animate_menu)
+
+
+       # Якщо меню ще не розкрилося до 200px, а статус "відкрито"
+       if not self.menu_frame.winfo_width() >= 200 and self.is_show_menu:
+           self.after(10, self.show_menu)  # Рекурсивно викликаємо себе через 10 мілісекунд (це і є анімація)
+       # Якщо меню ще не сховалося до 60px, а статус "закрито"
+       elif self.menu_frame.winfo_width() >= 60 and not self.is_show_menu:
+           self.after(10, self.show_menu)
+           # Під час закриття видаляємо (destroy) елементи, щоб вони не стискалися некрасиво
+           if self.label:
+               self.label.destroy()
+           if getattr(self, "entry", None):
+               self.entry.destroy()
+           if getattr(self, "save_button", None):
+               self.save_button.destroy()
+
+
+   # Функція збереження імені користувача
+   def save_name(self):
+       # Беремо текст з поля, .strip() видаляє зайві пробіли по краях
+       new_name = self.entry.get().strip()
+       if new_name:  # Якщо ім'я не порожнє
+           self.username = new_name  # Зберігаємо в змінну класу
+           self.add_message(f"• Ваш новий нік - ten out of ten: {self.username}")  # Виводимо системне повідомлення
+
+
+   # Функція адаптивного інтерфейсу (працює постійно)
+   def adaptive_ui(self):
+       # Висота меню дорівнює висоті вікна
+       self.menu_frame.configure(height=self.winfo_height())
+       # Посуваємо чат вправо на ширину меню
+       self.chat_field.place(x=self.menu_frame.winfo_width())
+       # Ширина чату = загальна ширина мінус меню мінус 20px (на відступи)
+       self.chat_field.configure(width=self.winfo_width() - self.menu_frame.winfo_width() - 20,
+                                 height=self.winfo_height() - 40)
+
+
+       # Кнопка відправки притискається в правий нижній кут
+       self.send_button.place(x=self.winfo_width() - 50, y=self.winfo_height() - 40)
+
+
+       # Поле введення ставиться одразу після меню, а по висоті вирівнюється з кнопкою відправки
+       self.message_entry.place(x=self.menu_frame.winfo_width(), y=self.send_button.winfo_y())
+       # Його ширина розраховується так, щоб заповнити місце між меню і кнопками
+       self.message_entry.configure(
+           width=self.winfo_width() - self.menu_frame.winfo_width() - 110)
+
+
+       # Кнопка картинки ставиться зліва від кнопки відправки
+       self.open_img_button.place(x=self.winfo_width() - 105, y=self.send_button.winfo_y())
+
+
+       # Циклічний виклик кожні 50 мілісекунд, щоб інтерфейс оновлювався плавно
+       self.after(50, self.adaptive_ui)
+
+
+   # Функція малювання нового повідомлення в чаті
+   def add_message(self, message, img=None):
+       # Створюємо окремий сірий блок (фрейм) для кожного повідомлення
+       message_frame = CTkFrame(self.chat_field, fg_color='#3d2369')
+       # anchor='w' притискає повідомлення до лівого краю (West)
+       message_frame.pack(pady=5, anchor='w')
+
+
+       # Розраховуємо максимальну ширину тексту до переносу на новий рядок
+       wrapleng_size = self.winfo_width() - self.menu_frame.winfo_width() - 40
+
+
+       if not img:  # Якщо картинку не передали (це просто текст)
+           # Створюємо текст, wraplength обрізає довгі рядки, justify='left' вирівнює по лівому краю
+           CTkLabel(message_frame, text=message, wraplength=wrapleng_size,
+                    text_color='#FFFFFF', justify='left').pack(padx=10, pady=5)
+       else:  # Якщо передали і текст, і картинку
+           # compound='top' вказує, що картинка буде ЗВЕРХУ над текстом
+           CTkLabel(message_frame, text=message, wraplength=wrapleng_size,
+                    text_color='white', image=img, compound='top',
+                    justify='left').pack(padx=10, pady=5)
+
+
+   # Функція відправки текстового повідомлення на сервер
+   def send_message(self):
+       # Беремо текст з поля вводу
+       message = self.message_entry.get()
+       if message:  # Якщо щось написали
+           self.add_message(f"{self.username}: {message}")  # Показуємо в себе
+           # Формуємо пакет даних
+           data = f"TEXT@{self.username}@{message}\n"
+           try:
+               # Відправляємо всі байти на сервер
+               self.sock.sendall(data.encode())
+           except:
+               pass
+       # Очищаємо поле вводу (від символу 0 до КІНЦЯ)
+       self.message_entry.delete(0, END)
+
+
+   # Функція, яка працює у фоні і постійно приймає дані від сервера
+   def recv_message(self):
+       buffer = ""  # Порожній рядок-буфер для накопичення шматків даних
+       while True:  # Безкінечний цикл
+           try:
+               # Чекаємо на отримання порції даних до 4096 байт
+               chunk = self.sock.recv(4096)
+               if not chunk:  # Якщо прийшло порожнє значення (сервер відключився)
+                   break
+               # Декодуємо байти в текст, ігноруючи зламані символи (errors='ignore')
+               buffer += chunk.decode('utf-8', errors='ignore')
+
+
+               # Поки в буфері є символ кінця повідомлення (\n)
+               while "\n" in buffer:
+                   # Розрізаємо буфер на дві частини: ПЕРШУ повну лінію та ВСЕ ІНШЕ (залишок)
+                   line, buffer = buffer.split("\n", 1)
+                   # Відправляємо повну лінію на розбір
+                   self.handle_line(line.strip())
+
+
+           except:
+               break
+       self.sock.close()  # Закриваємо з'єднання, якщо сталася помилка
+
+
+   # Розбір (парсинг) вхідного повідомлення
+   def handle_line(self, line):
+       if not line:  # Якщо рядок порожній - ігноруємо
+           return
+       # Розділяємо повідомлення по символу '@' максимум на 4 частини
+       parts = line.split("@", 3)
+       msg_type = parts[0]  # Перша частина - це тип (TEXT або IMAGE)
+
+
+       if msg_type == "TEXT":
+           if len(parts) >= 3:  # Перевіряємо, чи є автор і текст
+               author = parts[1]
+               message = parts[2]
+               self.add_message(f"{author}: {message}")  # Виводимо в чат
+
+
+       elif msg_type == "IMAGE":
+           if len(parts) >= 4:  # Перевіряємо, чи є автор, назва і код картинки
+               author = parts[1]
+               filename = parts[2]
+               b64_img = parts[3]  # Це сам текст картинки у форматі Base64
+               try:
+                   # Декодуємо текст назад у двійкові байти
+                   img_data = base64.b64decode(b64_img)
+                   # Відкриваємо ці байти як віртуальний файл-картинку за допомогою PIL
+                   pil_img = Image.open(io.BytesIO(img_data))
+                   # Конвертуємо у формат, який розуміє CustomTkinter
+                   ctk_img = CTkImage(pil_img, size=(300, 300))
+                   # Додаємо повідомлення з картинкою
+                   self.add_message(f"{author} надіслав(ла) зображення: {filename}", img=ctk_img)
+               except Exception as e:
+                   # Якщо під час декодування сталася помилка
+                   self.add_message(f"Помилка відображення зображення: {e}")
+       else:
+           # Якщо це системне повідомлення без протоколу
+           self.add_message(line)
+
+
+   # Функція для вибору та відправки картинки з комп'ютера
+   def open_image(self):
+       # Викликаємо системне вікно для вибору файлу
+       file_name = filedialog.askopenfilename()
+       if not file_name:  # Якщо користувач натиснув "Скасувати"
+           return
+       try:
+           # Відкриваємо файл на читання ('r') у двійковому форматі ('b')
+           with open(file_name, "rb") as f:
+               raw = f.read()  # Читаємо всі байти файлу
+           # Кодуємо байти у текстовий рядок Base64 і декодуємо результат у звичайний текст
+           b64_data = base64.b64encode(raw).decode()
+           # Отримуємо тільки назву файлу з усього шляху (наприклад, з C:/images/cat.jpg отримуємо cat.jpg)
+           short_name = os.path.basename(file_name)
+
+
+           # Формуємо пакет даних за протоколом IMAGE
+           data = f"IMAGE@{self.username}@{short_name}@{b64_data}\n"
+           # Відправляємо на сервер
+           self.sock.sendall(data.encode())
+           # Виводимо картинку в своєму вікні чату, щоб побачити, що ми відправили
+           self.add_message('', CTkImage(light_image=Image.open(file_name), size=(300, 300)))
+       except Exception as e:
+           self.add_message(f"Не вдалося надіслати зображення: {e}")
+
+
+
+
+# Класичний блок запуску: якщо скрипт запущено напряму (а не імпортовано)
+if __name__ == "__main__":
+   win = MainWindow()  # Створюємо об'єкт вікна
+   win.mainloop()
